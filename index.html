@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>The Realm of the Learning Vault — ATD SC Chapter 80th Anniversary</title>
 <style>
 /* ===== ADA-ACCESSIBLE FONTS & BASE ===== */
@@ -224,15 +224,24 @@ body::before {
 .seq-item {
   padding: 0.65rem 0.9rem; border-radius: 6px; border: 2px solid rgba(201,168,76,0.25);
   background: rgba(255,255,255,0.04); color: #e8d5a0; font-size: 0.98rem;
-  cursor: grab; display: flex; align-items: center; gap: 12px; transition: all 0.2s; user-select: none;
+  cursor: grab; display: flex; align-items: center; gap: 12px; transition: border-color 0.2s, background 0.2s; user-select: none;
+  touch-action: none; -webkit-user-select: none;
 }
 .seq-item:hover { border-color: rgba(201,168,76,0.6); background: rgba(201,168,76,0.08); }
-.seq-item.dragging { opacity: 0.5; border-color: #c9a84c; }
-.seq-item.drag-over { border-color: #e8c96a; background: rgba(201,168,76,0.18); }
+.seq-item.dragging { opacity: 0.45; border-color: #c9a84c; transform: scale(0.98); }
+.seq-item.drag-over { border-color: #e8c96a; background: rgba(201,168,76,0.22); transform: scale(1.02); }
+.seq-item.touch-dragging {
+  opacity: 0.9; border-color: #c9a84c; background: rgba(201,168,76,0.2);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5); position: fixed; z-index: 9999;
+  pointer-events: none; min-width: 260px; transition: none;
+}
 .seq-item.correct { border-color: #1D9E75; background: rgba(15,92,82,0.25); color: #9FE1CB; cursor: default; }
 .seq-item.wrong { border-color: #8b1a1a; background: rgba(139,26,26,0.18); color: #f5a0a0; }
-.seq-handle { color: #8a6820; font-size: 1rem; }
+.seq-handle { color: #8a6820; font-size: 1.1rem; padding: 0 4px; }
 .seq-num { font-weight: 700; font-size: 0.82rem; color: #c9a84c; min-width: 22px; }
+.seq-drop-indicator { height: 3px; background: #c9a84c; border-radius: 2px; margin: 2px 0; display: none; }
+.seq-drop-indicator.show { display: block; animation: pulse-ind 0.6s infinite alternate; }
+@keyframes pulse-ind { from { opacity: 0.5; } to { opacity: 1; } }
 .seq-check-btn {
   font-family: Arial, Helvetica, sans-serif; font-size: 0.88rem; font-weight: 700;
   background: transparent; border: 2px solid rgba(201,168,76,0.4); border-radius: 6px;
@@ -358,7 +367,27 @@ body::before {
 .final-key-instruction { font-size: 1rem; color: #e8d5a0; max-width: 480px; line-height: 1.7; margin-bottom: 0.5rem; }
 .name-display { font-weight: 700; color: #e8c96a; }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
-@media(max-width:600px) { .chamber-body { padding:1.1rem 0.9rem; } .match-container { grid-template-columns:1fr; } .tf-options { flex-direction:column; } }
+@media(max-width:600px) {
+  .chamber-body { padding:1.1rem 0.9rem; }
+  .match-container { grid-template-columns:1fr; }
+  .tf-options { flex-direction:column; }
+  .seq-item { padding: 0.85rem 0.9rem; font-size: 1rem; }
+  .seq-handle { font-size: 1.3rem; }
+  .scramble-word { font-size: 1.4rem; letter-spacing: 0.25em; }
+  .scramble-input-row { flex-direction: column; }
+  .scramble-input-row .rune-input { text-align: center; }
+  .decision-btn { padding: 0.9rem 1rem; font-size: 0.98rem; }
+  .opt-btn { padding: 0.8rem 0.9rem; }
+  .btn-primary { width: 100%; max-width: 340px; }
+  .key-display { font-size: 1.1rem; letter-spacing: 0.2em; padding: 0.85rem 1.25rem; }
+  .final-key-code { font-size: 1.3rem; letter-spacing: 0.2em; }
+  .intro-title { font-size: 1.6rem; }
+  .chamber-title-bar { font-size: 0.72rem; }
+}
+@media(max-width:400px) {
+  .seq-item { font-size: 0.92rem; }
+  .match-item { font-size: 0.9rem; padding: 0.65rem 0.6rem; }
+}
 </style>
 </head>
 <body>
@@ -1053,14 +1082,40 @@ function selectRight(pi, ri, p) {
   }
 }
 
-// ===== SEQUENCE =====
+// ===== SEQUENCE (Desktop drag + Mobile touch) =====
 function buildSequence(p, pi, block) {
   const currentOrder = [...Array(p.items.length).keys()];
   state.seqState[pi] = { order: currentOrder, dragSrc: null };
+
+  const touchHint = document.createElement("p");
+  touchHint.style.cssText = "font-size:0.85rem;color:#e8c96a;margin-bottom:0.6rem;opacity:0.8;";
+  touchHint.textContent = "💡 Press and hold an item, then drag it to reorder.";
+  block.appendChild(touchHint);
+
   const container = document.createElement("div");
   container.className = "sequence-container";
   container.id = "seq-container-"+pi;
   container.setAttribute("aria-label","Drag to reorder items");
+
+  // Touch state
+  let touchDragEl = null;
+  let touchClone = null;
+  let touchStartPos = null;
+  let touchCurrentTarget = null;
+  let touchOffsetX = 0;
+  let touchOffsetY = 0;
+
+  function getItemAtPoint(x, y, excludeEl) {
+    const items = container.querySelectorAll(".seq-item:not(.touch-dragging)");
+    for (const item of items) {
+      if (item === excludeEl) continue;
+      const rect = item.getBoundingClientRect();
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+        return item;
+      }
+    }
+    return null;
+  }
 
   function renderSeq() {
     container.innerHTML = "";
@@ -1068,15 +1123,20 @@ function buildSequence(p, pi, block) {
       const el = document.createElement("div");
       el.className = "seq-item";
       el.draggable = true;
-      el.dataset.pos = pos;
+      el.dataset.pos = String(pos);
       el.setAttribute("aria-label","Position " + (pos+1) + ": " + p.items[itemIdx] + ". Drag to reorder.");
       el.innerHTML = "<span class='seq-handle' aria-hidden='true'>&#8942;</span><span class='seq-num'>" + (pos+1) + ".</span><span>" + p.items[itemIdx] + "</span>";
+
+      // ---- MOUSE / DESKTOP DRAG ----
       el.addEventListener("dragstart", e => {
         state.seqState[pi].dragSrc = pos;
         el.classList.add("dragging");
         e.dataTransfer.effectAllowed = "move";
       });
-      el.addEventListener("dragend", () => el.classList.remove("dragging"));
+      el.addEventListener("dragend", () => {
+        el.classList.remove("dragging");
+        container.querySelectorAll(".seq-item").forEach(i => i.classList.remove("drag-over"));
+      });
       el.addEventListener("dragover", e => { e.preventDefault(); el.classList.add("drag-over"); });
       el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
       el.addEventListener("drop", e => {
@@ -1090,9 +1150,79 @@ function buildSequence(p, pi, block) {
           renderSeq();
         }
       });
+
+      // ---- TOUCH DRAG ----
+      el.addEventListener("touchstart", e => {
+        if (state.puzzleAnswers[pi] !== null) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+        const rect = el.getBoundingClientRect();
+        touchOffsetX = touch.clientX - rect.left;
+        touchOffsetY = touch.clientY - rect.top;
+        touchDragEl = el;
+        touchStartPos = pos;
+        touchCurrentTarget = null;
+
+        // Create floating clone
+        touchClone = el.cloneNode(true);
+        touchClone.classList.add("touch-dragging");
+        touchClone.style.width = rect.width + "px";
+        touchClone.style.left = (touch.clientX - touchOffsetX) + "px";
+        touchClone.style.top = (touch.clientY - touchOffsetY) + "px";
+        document.body.appendChild(touchClone);
+        el.style.opacity = "0.3";
+      }, { passive: false });
+
+      el.addEventListener("touchmove", e => {
+        if (!touchClone || !touchDragEl) return;
+        e.preventDefault();
+        const touch = e.touches[0];
+
+        // Move clone
+        touchClone.style.left = (touch.clientX - touchOffsetX) + "px";
+        touchClone.style.top = (touch.clientY - touchOffsetY) + "px";
+
+        // Detect which item we're hovering over
+        const hovered = getItemAtPoint(touch.clientX, touch.clientY, touchDragEl);
+        container.querySelectorAll(".seq-item").forEach(i => i.classList.remove("drag-over"));
+        if (hovered && hovered !== touchDragEl) {
+          hovered.classList.add("drag-over");
+          touchCurrentTarget = hovered;
+        } else {
+          touchCurrentTarget = null;
+        }
+      }, { passive: false });
+
+      el.addEventListener("touchend", e => {
+        if (!touchClone || !touchDragEl) return;
+        e.preventDefault();
+
+        // Remove clone and restore opacity
+        document.body.removeChild(touchClone);
+        touchClone = null;
+        touchDragEl.style.opacity = "";
+        container.querySelectorAll(".seq-item").forEach(i => i.classList.remove("drag-over"));
+
+        if (touchCurrentTarget) {
+          const dstPos = parseInt(touchCurrentTarget.dataset.pos);
+          const srcPos = touchStartPos;
+          if (srcPos !== dstPos) {
+            const ord = state.seqState[pi].order;
+            const tmp = ord[srcPos]; ord[srcPos] = ord[dstPos]; ord[dstPos] = tmp;
+            renderSeq();
+          }
+        }
+
+        touchDragEl = null;
+        touchClone = null;
+        touchCurrentTarget = null;
+        touchStartPos = null;
+      }, { passive: false });
+
       container.appendChild(el);
     });
   }
+
   renderSeq();
   block.appendChild(container);
 
